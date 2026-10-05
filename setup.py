@@ -1,0 +1,52 @@
+import os
+import sys
+
+from setuptools import setup
+from setuptools.command.build_py import build_py as _build_py
+
+
+class build_py(_build_py):
+    """Fetch the pinned ldapx release into the package before it is installed."""
+
+    def run(self):
+        root = os.path.dirname(os.path.abspath(__file__))
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        try:
+            from bloodhound.ldapxbin import install_bundled_ldapx
+            path = install_bundled_ldapx()
+            print('bundled ldapx:', path)
+        except Exception as exc:
+            print('warning: ldapx was not bundled (%s). It will be downloaded on first --ldapx-target use, or pass --ldapx-binary.' % exc)
+        _build_py.run(self)
+
+
+setup(name='bloodhound-ce',
+      version='1.9.0',
+      description='Python based ingestor for BloodHound Community Edition',
+      author='Dirk-jan Mollema, Edwin van Vliet, Matthijs Gielen',
+      author_email='dirkjan@dirkjanm.io, edwin.vanvliet@fox-it.com, matthijs.gielen@fox-it.com',
+      maintainer='Dirk-jan Mollema',
+      maintainer_email='dirkjan@dirkjanm.io',
+      url='https://github.com/dirkjanm/bloodhound.py',
+      packages=['bloodhound',
+                'bloodhound.ad',
+                'bloodhound.lib',
+                'bloodhound.enumeration'],
+      package_data={'bloodhound': ['bin/ldapx', 'bin/ldapx.exe', 'bin/VERSION']},
+      cmdclass={'build_py': build_py},
+      license='MIT',
+      install_requires=['dnspython', 'impacket>=0.9.17', 'ldap3>=2.5,!=2.5.2,!=2.5.0,!=2.6', 'pyasn1>=0.4', 'pycryptodome', 'PySocks'],
+      classifiers=[
+        'Intended Audience :: Information Technology',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
+      ],
+      entry_points= {
+        'console_scripts': ['bloodhound-ce-python=bloodhound:main']
+      }
+      )
