@@ -25,7 +25,7 @@ There are different install methods for BloodHound Community Edition (CE) and Bl
 The following install methods are available:
 * Via pip: `pip install bloodhound`
 * Via pipx: `pipx install bloodhound`
-* By cloning this repository `git clone https://github.com/dirkjanm/BloodHound.py` and running `pip install .` from the project directory.
+* By cloning this repository `git clone https://github.com/An0nUD4Y/bloodhound-ldapx.py` and running `pip install .` from the project directory.
 
 The BloodHound.py Legacy installation will add a command line tool `bloodhound-python` to your PATH.
 
@@ -33,7 +33,7 @@ The BloodHound.py Legacy installation will add a command line tool `bloodhound-p
 The following install methods are available:
 * Via pip: `pip install bloodhound-ce`
 * Via pipx: `pipx install bloodhound-ce`
-* By cloning this repository `git clone https://github.com/dirkjanm/BloodHound.py`, checking out the CE branch `git checkout bloodhound-ce` and running `pip install .` from the project directory.
+* By cloning this repository `git clone https://github.com/An0nUD4Y/bloodhound-ldapx.py`, checking out the CE branch `git checkout bloodhound-ce` and running `pip install .` from the project directory.
 
 The BloodHound.py CE ingestor will add a command line tool `bloodhound-ce-python` to your PATH.
 
