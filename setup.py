@@ -21,7 +21,7 @@ class build_py(_build_py):
         _build_py.run(self)
 
 
-setup(name='bloodhound-ce',
+setup(name='bloodhound-ce-ldapx',
       version='1.9.0',
       description='Python based ingestor for BloodHound Community Edition',
       author='Dirk-jan Mollema, Edwin van Vliet, Matthijs Gielen',
@@ -47,6 +47,6 @@ setup(name='bloodhound-ce',
         'Programming Language :: Python :: 3.12',
       ],
       entry_points= {
-        'console_scripts': ['bloodhound-ce-python=bloodhound:main']
+        'console_scripts': ['bloodhound-ce-ldapx=bloodhound:main']
       }
       )
