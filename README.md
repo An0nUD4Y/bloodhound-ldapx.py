@@ -31,11 +31,11 @@ The BloodHound.py Legacy installation will add a command line tool `bloodhound-p
 
 ### BloodHound CE
 The following install methods are available:
-* Via pip: `pip install bloodhound-ce`
-* Via pipx: `pipx install bloodhound-ce`
+* Via pip: `pip install bloodhound-ce-ldapx`
+* Via pipx: `pipx install bloodhound-ce-ldapx`
 * By cloning this repository `git clone https://github.com/An0nUD4Y/bloodhound-ldapx.py`, checking out the CE branch `git checkout bloodhound-ce` and running `pip install .` from the project directory.
 
-The BloodHound.py CE ingestor will add a command line tool `bloodhound-ce-python` to your PATH.
+The BloodHound.py CE ingestor will add a command line tool `bloodhound-ce-ldapx` to your PATH.
 
 `pip install` also downloads [ldapx](https://github.com/Macmod/ldapx) v1.3.5 for the current operating system into the package (`bloodhound/bin`). You do not need a separate ldapx install or a Go toolchain. If that download fails, the same fetch runs the first time `--ldapx-target` is used. `--ldapx-binary` still selects a different executable.
 
@@ -73,7 +73,7 @@ Host collection (`LocalAdmin`, `Session`, `LoggedOn`, `DCOM`, `RDP`, `PSRemote`,
 THIS MAY TAKE FEW HOURS TO DAYS TO COMPLETE, Please test in lab and modify the sleep times accordingly.
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   --auth-method kerberos -c DCOnly --outputprefix corp \
   --ldapx-target 10.1.1.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080 \
@@ -88,7 +88,7 @@ bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
 DC-only collection through ldapx, LDAPS, and a SOCKS5 proxy. New searches wait 4–4.8s. Later pages of the same search wait 2–2.8s. The console stays at info level and the debug trace goes to a file.
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   --auth-method kerberos -c DCOnly --outputprefix corp \
   --ldapx-target 10.1.1.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080 \
@@ -101,7 +101,7 @@ bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
 The same command after it stopped. Finished phases are skipped. The phase that was in progress is collected again. Output files keep the prefix and the original timestamp: `corp_<timestamp>_users.json`.
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   --auth-method kerberos -c DCOnly --outputprefix corp --resume \
   --ldapx-target 10.1.1.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080 \
@@ -114,7 +114,7 @@ bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
 A directory of about 20000 objects, split into `objectGUID` slices. The 30s search interval is between slices. The 5s page interval is between pages inside one slice. Together the two waits are about 21 minutes plus response time.
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   -c DCOnly --outputprefix corp --partition-ldap \
   --ldap-interval 30s --ldap-jitter 20 \
   --ldap-page-interval 5s --ldap-page-jitter 40 \
@@ -124,7 +124,7 @@ bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
 All collection methods, including host RPC. LDAP uses the two intervals above. Each Session, LocalAdmin, RDP, DCOM, PSRemote, and LoggedOn call waits about 1s, plus or minus 20%.
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   -c All --outputprefix corp \
   --ldap-interval 4s --ldap-jitter 20 \
   --ldap-page-interval 2s --ldap-page-jitter 40 \
@@ -135,7 +135,7 @@ bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local \
 Reuse a ccache instead of requesting a new TGT. If the cache already holds `ldap/dc01.domain.local`, the service-ticket request is skipped as well. `-no-pass` works because the password is not needed.
 
 ```
-bloodhound-ce-python -u USER -k -no-pass -d domain.local -dc dc01.domain.local \
+bloodhound-ce-ldapx -u USER -k -no-pass -d domain.local -dc dc01.domain.local \
   --auth-method kerberos -c DCOnly \
   --ldapx-target 10.1.1.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080
@@ -143,13 +143,13 @@ bloodhound-ce-python -u USER -k -no-pass -d domain.local -dc dc01.domain.local \
 
 
 ## ldapx integration
-BloodHound.py CE can run [ldapx](https://github.com/Macmod/ldapx) as a managed child process, so all LDAP searches are transformed by ldapx middlewares before they reach the Domain Controller. This replaces the manual `proxychains4 ldapx ...` + `bloodhound-ce-python -dc localhost` setup and also makes Kerberos work in that setup.
+BloodHound.py CE can run [ldapx](https://github.com/Macmod/ldapx) as a managed child process, so all LDAP searches are transformed by ldapx middlewares before they reach the Domain Controller. This replaces the manual `proxychains4 ldapx ...` + `bloodhound-ce-ldapx -dc localhost` setup and also makes Kerberos work in that setup.
 
 The ldapx binary is downloaded for you (see Installation). PySocks is installed with BloodHound.py and is required for `--ldapx-socks`. The SOCKS5 proxy must be able to reach the DC on LDAP (389, or 636 with `--ldapx-ldaps`), the Global Catalog (3268, or 3269 with `--ldapx-ldaps`), and Kerberos TCP/88.
 
 Example:
 ```
-bloodhound-ce-python -u user -p Pass -d domain.local -c DCOnly -v \
+bloodhound-ce-ldapx -u user -p Pass -d domain.local -c DCOnly -v \
   --ldapx-target 10.11.10.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080 \
   --ldapx-filter OGDR --ldapx-attrlist Owp --ldapx-basedn OX
@@ -230,7 +230,7 @@ Each of those sections prints how many LDAP searches it sent, for example `users
 JSON is written to a `.partial` file and renamed onto the real name only after the `meta` footer is flushed. A crash leaves the previous phase's file valid and does not leave a half-written file for BloodHound to import.
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -c DCOnly --outputprefix corp --resume
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -c DCOnly --outputprefix corp --resume
 ```
 
 ## Logging
@@ -242,7 +242,7 @@ bloodhound-ce-python -u USER -p PASS -d domain.local -c DCOnly --outputprefix co
 LDAP response bodies are not written, so a domain's search results and schema do not land in the file. The console stays at the normal info level unless you also pass `-v`. A collection prints one info line as each phase starts (`Collecting users`), `Found 20 users` when it finishes, and `users: 14 LDAP searches` for how many LDAP searches that section sent. While either LDAP interval is set, each finished page also adds one line such as `Schema page 4, 300 objects`. Without an interval those page lines stay in the debug log. With both `-v` and `--log-file`, `-v` prints debug to the console as well, and ldapx still omits response bodies so the log file stays readable.
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -c DCOnly --log-file bloodhound.log
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -c DCOnly --log-file bloodhound.log
 ```
 
 ## Guide
@@ -253,7 +253,7 @@ This is a full DC-only collection through a local SOCKS5 proxy, with ldapx obfus
 3. Run:
 
 ```
-bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local -c DCOnly \
+bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local -c DCOnly \
   --ldapx-target 10.1.1.1:389 \
   --ldapx-socks socks5://127.0.0.1:1080 \
   --ldapx-filter OGDR --ldapx-attrlist Owp --ldapx-basedn OX \
@@ -264,7 +264,7 @@ bloodhound-ce-python -u USER -p PASS -d domain.local -dc dc01.domain.local -c DC
 
 `-dc dc01.domain.local` is only the Kerberos SPN hostname in this mode. The sockets go to `--ldapx-target` through `--ldapx-socks`. `-d domain.local` supplies the base DN (`DC=domain,DC=local`) even when DNS lookups fail.
 
-On Windows, start the tool as `bloodhound-ce-python`. `python bloodhound.py` calls `main()` on import, and the ACL process pool re-imports that file in every worker, so each worker starts another full collection and then crashes. Pass `--disable-pooling` if you launch `bloodhound.py` directly; ACLs are still parsed, in-process.
+On Windows, start the tool as `bloodhound-ce-ldapx`. `python bloodhound.py` calls `main()` on import, and the ACL process pool re-imports that file in every worker, so each worker starts another full collection and then crashes. Pass `--disable-pooling` if you launch `bloodhound.py` directly; ACLs are still parsed, in-process.
 
 4. Check the log:
    - `New LDAP searches at least 2s apart, plus 0-50% jitter`
@@ -287,14 +287,14 @@ Raise `--ldap-interval` once the short run looks right. A 2 second interval is o
 ## Limitations
 BloodHound.py currently has the following limitations:
 - Supports most, but not all BloodHound (SharpHound) features. Currently GPO local groups are not supported, all other collection methods are implemented.
-- On Windows, `python bloodhound.py` cannot use the ACL process pool. Use `bloodhound-ce-python`, or pass `--disable-pooling`.
+- On Windows, `python bloodhound.py` cannot use the ACL process pool. Use `bloodhound-ce-ldapx`, or pass `--disable-pooling`.
 
 ## Docker usage
 1. Build container  
 ```docker build -t bloodhound .```  
 2. Run container  
 ```docker run -v ${PWD}:/bloodhound-data -it bloodhound```  
-After that you can run `bloodhound-python` inside the container, all data will be stored in the path from where you start the container.
+After that you can run `bloodhound-ce-ldapx` inside the container, all data will be stored in the path from where you start the container.
 
 ## Credits
 BloodHound.py was originally written by Dirk-jan Mollema, Edwin van Vliet and Matthijs Gielen from [Fox-IT (NCC Group)](https://fox-it.com/). BloodHound.py is currently maintained by Dirk-jan Mollema from [Outsider Security](https://outsidersecurity.nl). The implementation and data model is based on the original tool from [SpecterOps](https://specterops.io). Many thanks to everyone who contributed by testing, submitting issues and pull requests over the years.
