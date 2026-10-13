@@ -25,6 +25,23 @@
 import os, sys, logging, argparse, getpass, time, re, tempfile, textwrap
 import socket, subprocess, threading
 from zipfile import ZipFile
+
+# pyasn1 >= 0.5 on Python >= 3.14 treats OctetString as UTF-8,
+# which crashes on raw GUID bytes (\x80-\xff) used in LDAP substring
+# filters for GUID slicing.  Fall back to latin-1 so the full \x00-\xff
+# range round-trips without loss.
+try:
+    import pyasn1.type.univ as _univ
+    _orig_octet_str = _univ.OctetString.__str__
+    def _octet_str_latin1_fallback(self):
+        try:
+            return self._value.decode(self.encoding)
+        except (UnicodeDecodeError, AttributeError):
+            return self._value.decode('latin-1')
+    _univ.OctetString.__str__ = _octet_str_latin1_fallback
+except Exception:
+    pass
+
 from bloodhound.ad.domain import AD, ADDC
 from bloodhound.ad.authentication import ADAuthentication, enable_kerberos_socks, disable_kerberos_socks
 from bloodhound.ad.utils import ADUtils, CollectionException, parse_ldap_interval, parse_throttle, install_ldap_pacing, install_ldap_search_counter, install_host_pacing, ldap_search_count
@@ -461,9 +478,12 @@ class BloodHound(object):
         self.ad.create_objectresolver(self.pdc)
 
 
-    def run(self, collect, num_workers=10, disable_pooling=False, timestamp="", computerfile="", cachefile=None, exclude_dcs=False, fileNamePrefix="", resume=None, partition_ldap=False):
+    def run(self, collect, num_workers=10, disable_pooling=False, timestamp="", computerfile="", cachefile=None, exclude_dcs=False, fileNamePrefix="", resume=None, partition_ldap=False, search_base=None):
         start_time = time.time()
         install_ldap_search_counter()
+        if search_base:
+            self.ad.search_baseDN = search_base
+            logging.info('Scoped enumeration to search base: %s', search_base)
         self.resume = resume
         self.pdc.partition_ldap = partition_ldap
         if resume is not None:
@@ -754,6 +774,13 @@ def main():
                              'objectGUID slices. --ldap-interval applies when a slice starts and '
                              '--ldap-page-interval applies between pages inside a slice. Finished slices '
                              'are skipped on --resume.')
+    coopts.add_argument('--search-base',
+                        action='store',
+                        metavar='DN',
+                        help='Custom LDAP search base DN for scoped enumeration '
+                             '(e.g. OU=Sales,DC=corp,DC=local). Limits all LDAP queries '
+                             'to this subtree. Trust and domain-level queries still use '
+                             'the domain root.')
     coopts.add_argument('-op',
                         '--outputprefix',
                         metavar='PREFIX_NAME',
@@ -1011,7 +1038,8 @@ def main():
                        exclude_dcs=args.exclude_dcs,
                        fileNamePrefix=args.outputprefix,
                        resume=resume,
-                       partition_ldap=args.partition_ldap)
+                       partition_ldap=args.partition_ldap,
+                       search_base=args.search_base)
         #If args --zip is true, the compress output
         if args.zip:
             logging.info("Compressing output into " + timestamp + "bloodhound.zip")

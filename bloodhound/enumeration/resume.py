@@ -101,12 +101,6 @@ def concat_slice_files(filename, meta_type, paths, extra_rows=None):
         except OSError:
             pass
     os.replace(partial, filename)
-    """
-    BloodHound JSON path. An empty prefix matches the historical naming.
-    """
-    if prefix:
-        return prefix + '_' + timestamp + basename
-    return timestamp + basename
 
 
 def _stem(filename):

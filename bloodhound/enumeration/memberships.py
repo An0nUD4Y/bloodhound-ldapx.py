@@ -120,11 +120,11 @@ class MembershipEnumerator(object):
         for prefix in GUID_SLICES:
             path = slice_output_path(filename, prefix)
             if self.resume is not None and self.resume.slice_done(phase, prefix) and os.path.isfile(path):
-                logging.info('Skipping %s slice %s', phase, prefix)
+                logging.info('Skipping %s slice %s (%d/256)', phase, prefix, len(slice_files) + 1)
                 slice_files.append(path)
                 continue
             remove_output(path)
-            logging.info('Collecting %s slice %s', phase, prefix)
+            logging.info('Collecting %s slice %s (%d/256)', phase, prefix, len(slice_files) + 1)
             self.result_q = queue.Queue()
             status = self._start_writer(OutputWorker.membership_write_worker, (self.result_q, meta_type, path))
             fill(fetch(prefix))
@@ -353,10 +353,9 @@ class MembershipEnumerator(object):
 
     def _process_group(self, entry, with_properties, acl, is_highvalue):
         resolved_entry = ADUtils.resolve_ad_entry(entry)
-        try:
-            sid = entry['attributes']['objectSid']
-        except KeyError:
-            logging.warning('Could not determine SID for group %s', entry['attributes']['distinguishedName'])
+        sid = ADUtils.get_entry_property(entry, 'objectSid')
+        if not sid:
+            logging.warning('Could not determine SID for group %s', ADUtils.get_entry_property(entry, 'distinguishedName'))
             return
         group = {
             "ObjectIdentifier": sid,
@@ -383,7 +382,7 @@ class MembershipEnumerator(object):
                 group['Properties']['whencreated'] = whencreated
             else:
                 group['Properties']['whencreated'] = calendar.timegm(whencreated.timetuple())
-        for member in entry['attributes']['member']:
+        for member in ADUtils.get_entry_property(entry, 'member', []):
             resolved_member = self.get_membership(member)
             if resolved_member:
                 group['Members'].append(resolved_member)

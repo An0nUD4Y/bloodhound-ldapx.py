@@ -243,7 +243,7 @@ class ADDC(ADComputer):
             if not self.ldap_connect(resolver=use_resolver):
                 raise CollectionException('Could not connect to LDAP server %s' % self.hostname)
         if search_base is None:
-            search_base = self.ad.baseDN
+            search_base = self.ad.search_baseDN or self.ad.baseDN
         if attributes is None or attributes == []:
             attributes = ALL_ATTRIBUTES
         if query_sd:
@@ -860,6 +860,7 @@ class AD(object):
         # gc_connect dial these instead of resolving and probing the DC.
         self.ldap_listener = None
         self.gc_listener = None
+        self.search_baseDN = None
 
     def realm(self):
         if self.domain is not None:

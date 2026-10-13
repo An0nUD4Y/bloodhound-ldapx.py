@@ -711,18 +711,21 @@ class LdapQueryPacer(object):
             time.sleep(min(1.0, remaining))
             remaining = target - time.monotonic()
 
-    def _pause(self, base, jitter):
+    def _pause(self, base, jitter, is_page):
         if self._last_finish is None or base <= 0:
             return
         extra = base * jitter * random.random()
-        self._sleep_until(self._last_finish + base + extra)
+        total = base + extra
+        label = 'page' if is_page else 'search'
+        logging.debug('LDAP %s pacing: %.1fs delay (base %.1fs + jitter %.1fs)', label, total, base, extra)
+        self._sleep_until(self._last_finish + total)
 
     def run(self, func, *args, **kwargs):
         with self._lock:
             if _continuation_page(kwargs):
-                self._pause(self.page_interval, self.page_jitter)
+                self._pause(self.page_interval, self.page_jitter, is_page=True)
             else:
-                self._pause(self.interval, self.jitter)
+                self._pause(self.interval, self.jitter, is_page=False)
             try:
                 return func(*args, **kwargs)
             finally:
@@ -764,9 +767,12 @@ class HostCallPacer(object):
         with self._lock:
             if self._last_finish is not None and self.throttle > 0:
                 span = self.throttle * self.jitter
-                delay = self.throttle + random.uniform(-span, span)
+                jitter_val = random.uniform(-span, span)
+                delay = self.throttle + jitter_val
                 if delay < 0:
                     delay = 0
+                logging.debug('Host pacing: %.0fms delay (base %.0fms + jitter %+.0fms)',
+                              delay * 1000, self.throttle * 1000, jitter_val * 1000)
                 self._sleep_until(self._last_finish + delay)
             try:
                 return func(*args, **kwargs)
