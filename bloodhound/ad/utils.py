@@ -987,27 +987,6 @@ class TimeWindow(object):
                 text += ' (jitter +/-%.0fm)' % self.jitter_minutes
         return text
 
-    def describe_forecast(self, periods=3):
-        now = datetime.datetime.now()
-        lines = []
-        for day_offset in range(8):
-            if len(lines) >= periods:
-                break
-            candidate = now + datetime.timedelta(days=day_offset)
-            if candidate.isoweekday() not in self.allowed_days:
-                continue
-            if day_offset == 0:
-                start, end = self._effective_times_today()
-            else:
-                start, end = self._random_effective_times(candidate)
-            if day_offset == 0 and end <= now:
-                continue
-            day_name = candidate.strftime('%A %Y-%m-%d')
-            lines.append('  %s: %s - %s' % (
-                day_name, start.strftime('%H:%M'), end.strftime('%H:%M')))
-        return 'Forecasted run periods:\n' + '\n'.join(lines)
-
-
 def install_time_window(start_hour, start_minute, end_hour, end_minute,
                         allowed_days, jitter_minutes=0):
     global _TIME_WINDOW

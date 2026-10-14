@@ -945,7 +945,6 @@ def main():
         tw = install_time_window(run_start_h, run_start_m, run_end_h, run_end_m,
                                  run_days, run_jitter_minutes)
         logging.info(tw.describe())
-        logging.info(tw.describe_forecast())
         install_ldap_search_counter()
     if args.ldapx_target:
         if args.use_ldaps:
