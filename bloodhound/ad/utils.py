@@ -21,6 +21,7 @@
 # SOFTWARE.
 #
 ####################
+import datetime
 import logging
 import socket
 import threading
@@ -765,6 +766,9 @@ class HostCallPacer(object):
 
     def run(self, func, *args, **kwargs):
         with self._lock:
+            tw = _TIME_WINDOW
+            if tw is not None:
+                tw.wait_if_outside()
             if self._last_finish is not None and self.throttle > 0:
                 span = self.throttle * self.jitter
                 jitter_val = random.uniform(-span, span)
@@ -817,6 +821,9 @@ def install_ldap_search_counter():
     def _counted_search(self, *args, **kwargs):
         global _LDAP_SEARCHES
         _LDAP_SEARCHES += 1
+        tw = _TIME_WINDOW
+        if tw is not None:
+            tw.wait_if_outside()
         pacer = _LDAP_PACER
         if pacer is None:
             return original(self, *args, **kwargs)
@@ -845,6 +852,172 @@ def install_host_pacing(throttle_ms, jitter_pct):
     global _HOST_PACER
     _HOST_PACER = HostCallPacer(throttle_ms, jitter_pct)
     return _HOST_PACER
+
+
+_TIME_WINDOW = None
+
+
+def parse_run_time(value):
+    value = value.strip()
+    if len(value) != 4 or not value.isdigit():
+        raise ValueError('Time must be HHMM (e.g. 0900, 1730), got: %s' % value)
+    hour, minute = int(value[:2]), int(value[2:])
+    if hour > 23 or minute > 59:
+        raise ValueError('Invalid time %s (hour 0-23, minute 0-59)' % value)
+    return hour, minute
+
+
+def parse_run_jitter(value):
+    value = value.strip().lower()
+    m = re.match(r'^(\d+(?:\.\d+)?)\s*(s|m|h)?$', value)
+    if not m:
+        raise ValueError('Invalid jitter duration: %s (use e.g. 15m, 30s, 1h)' % value)
+    num = float(m.group(1))
+    unit = m.group(2) or 'm'
+    if unit == 's':
+        return num / 60.0
+    elif unit == 'h':
+        return num * 60.0
+    return num
+
+
+class TimeWindow(object):
+    def __init__(self, start_hour, start_minute, end_hour, end_minute,
+                 allowed_days, jitter_minutes=0):
+        self.start = (start_hour, start_minute)
+        self.end = (end_hour, end_minute)
+        self.allowed_days = set(allowed_days)
+        self.jitter_minutes = jitter_minutes
+        self._current_start_jitter = 0
+        self._current_end_jitter = 0
+        self._jitter_rolled_for_date = None
+
+    def _roll_jitter_if_new_day(self):
+        today = datetime.date.today()
+        if self._jitter_rolled_for_date != today:
+            if self.jitter_minutes > 0:
+                self._current_start_jitter = random.uniform(
+                    -self.jitter_minutes, self.jitter_minutes)
+                self._current_end_jitter = random.uniform(
+                    -self.jitter_minutes, self.jitter_minutes)
+            else:
+                self._current_start_jitter = 0
+                self._current_end_jitter = 0
+            self._jitter_rolled_for_date = today
+
+    def _effective_times_today(self):
+        self._roll_jitter_if_new_day()
+        now = datetime.datetime.now()
+        start = now.replace(hour=self.start[0], minute=self.start[1],
+                            second=0, microsecond=0)
+        start += datetime.timedelta(minutes=self._current_start_jitter)
+        end = now.replace(hour=self.end[0], minute=self.end[1],
+                          second=0, microsecond=0)
+        end += datetime.timedelta(minutes=self._current_end_jitter)
+        return start, end
+
+    def _random_effective_times(self, dt):
+        if self.jitter_minutes > 0:
+            sj = random.uniform(-self.jitter_minutes, self.jitter_minutes)
+            ej = random.uniform(-self.jitter_minutes, self.jitter_minutes)
+        else:
+            sj, ej = 0, 0
+        start = dt.replace(hour=self.start[0], minute=self.start[1],
+                           second=0, microsecond=0)
+        start += datetime.timedelta(minutes=sj)
+        end = dt.replace(hour=self.end[0], minute=self.end[1],
+                         second=0, microsecond=0)
+        end += datetime.timedelta(minutes=ej)
+        return start, end
+
+    def is_inside(self, now=None):
+        if now is None:
+            now = datetime.datetime.now()
+        if now.isoweekday() not in self.allowed_days:
+            return False
+        start, end = self._effective_times_today()
+        return start <= now <= end
+
+    def next_window_start(self, now=None):
+        if now is None:
+            now = datetime.datetime.now()
+        for day_offset in range(8):
+            candidate = now + datetime.timedelta(days=day_offset)
+            if candidate.isoweekday() not in self.allowed_days:
+                continue
+            if day_offset == 0:
+                start, _ = self._effective_times_today()
+            else:
+                start, _ = self._random_effective_times(candidate)
+            if start > now:
+                return start
+        return None
+
+    def wait_if_outside(self):
+        now = datetime.datetime.now()
+        if self.is_inside(now):
+            return
+        next_start = self.next_window_start(now)
+        if next_start is None:
+            return
+        day_name = next_start.strftime('%A')
+        time_str = next_start.strftime('%H:%M')
+        sleep_seconds = (next_start - now).total_seconds()
+        if sleep_seconds <= 0:
+            return
+        logging.info(
+            'Outside run window. Sleeping until %s %s (%s)',
+            day_name, time_str, format_duration(sleep_seconds))
+        target = time.monotonic() + sleep_seconds
+        while time.monotonic() < target:
+            time.sleep(min(1.0, target - time.monotonic()))
+        logging.info('Run window opened. Resuming collection.')
+
+    def describe(self):
+        day_names = {1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu',
+                     5: 'Fri', 6: 'Sat', 7: 'Sun'}
+        days = ', '.join(day_names[d] for d in sorted(self.allowed_days))
+        text = 'Run window: %s %02d%02d-%02d%02d' % (
+            days, self.start[0], self.start[1],
+            self.end[0], self.end[1])
+        if self.jitter_minutes > 0:
+            if self.jitter_minutes >= 60:
+                text += ' (jitter +/-%s)' % format_duration(self.jitter_minutes * 60)
+            else:
+                text += ' (jitter +/-%.0fm)' % self.jitter_minutes
+        return text
+
+    def describe_forecast(self, periods=3):
+        now = datetime.datetime.now()
+        lines = []
+        for day_offset in range(8):
+            if len(lines) >= periods:
+                break
+            candidate = now + datetime.timedelta(days=day_offset)
+            if candidate.isoweekday() not in self.allowed_days:
+                continue
+            if day_offset == 0:
+                start, end = self._effective_times_today()
+            else:
+                start, end = self._random_effective_times(candidate)
+            if day_offset == 0 and end <= now:
+                continue
+            day_name = candidate.strftime('%A %Y-%m-%d')
+            lines.append('  %s: %s - %s' % (
+                day_name, start.strftime('%H:%M'), end.strftime('%H:%M')))
+        return 'Forecasted run periods:\n' + '\n'.join(lines)
+
+
+def install_time_window(start_hour, start_minute, end_hour, end_minute,
+                        allowed_days, jitter_minutes=0):
+    global _TIME_WINDOW
+    _TIME_WINDOW = TimeWindow(start_hour, start_minute, end_hour, end_minute,
+                              allowed_days, jitter_minutes)
+    return _TIME_WINDOW
+
+
+def get_time_window():
+    return _TIME_WINDOW
 
 
 def get_host_pacer():

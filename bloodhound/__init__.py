@@ -44,7 +44,7 @@ except Exception:
 
 from bloodhound.ad.domain import AD, ADDC
 from bloodhound.ad.authentication import ADAuthentication, enable_kerberos_socks, disable_kerberos_socks
-from bloodhound.ad.utils import ADUtils, CollectionException, parse_ldap_interval, parse_throttle, install_ldap_pacing, install_ldap_search_counter, install_host_pacing, ldap_search_count
+from bloodhound.ad.utils import ADUtils, CollectionException, parse_ldap_interval, parse_throttle, parse_run_time, parse_run_jitter, install_ldap_pacing, install_ldap_search_counter, install_host_pacing, install_time_window, ldap_search_count
 from bloodhound.ldapxbin import LDAPX_VERSION, resolve_ldapx_binary
 from bloodhound.enumeration.computers import ComputerEnumerator
 from bloodhound.enumeration.memberships import MembershipEnumerator
@@ -781,6 +781,30 @@ def main():
                              '(e.g. OU=Sales,DC=corp,DC=local). Limits all LDAP queries '
                              'to this subtree. Trust and domain-level queries still use '
                              'the domain root.')
+    coopts.add_argument('--run-start',
+                        metavar='HHMM',
+                        action='store',
+                        help='Earliest time of day to run, in 24h HHMM format (e.g. 0900). '
+                             'Requires --run-end. Outside this window the tool sleeps until '
+                             'the next valid window opens.')
+    coopts.add_argument('--run-end',
+                        metavar='HHMM',
+                        action='store',
+                        help='Latest time of day to run, in 24h HHMM format (e.g. 1730). '
+                             'Requires --run-start.')
+    coopts.add_argument('--run-days',
+                        metavar='DAYS',
+                        action='store',
+                        help='Comma-separated day numbers when the tool may run. '
+                             '1=Monday, 2=Tuesday, ..., 7=Sunday. '
+                             'Default: all days. Example: 1,2,3,4,5 for weekdays.')
+    coopts.add_argument('--run-jitter',
+                        metavar='DURATION',
+                        action='store',
+                        help='Jitter on --run-start and --run-end, randomized independently '
+                             'each day. Shifts the effective start and end by +/- this amount. '
+                             'Plain number is minutes; suffixes s/m/h accepted (e.g. 15m, 30s, 1h). '
+                             'Default: 0.')
     coopts.add_argument('-op',
                         '--outputprefix',
                         metavar='PREFIX_NAME',
@@ -888,6 +912,41 @@ def main():
         parser.error('--throttle-jitter must be between 0 and 100')
     if args.throttle_jitter and throttle_ms is None:
         parser.error('--throttle-jitter requires --throttle')
+    if args.run_start and not args.run_end:
+        parser.error('--run-start requires --run-end')
+    if args.run_end and not args.run_start:
+        parser.error('--run-end requires --run-start')
+    if args.run_jitter and not args.run_start:
+        parser.error('--run-jitter requires --run-start and --run-end')
+    if args.run_days and not args.run_start:
+        parser.error('--run-days requires --run-start and --run-end')
+    if args.run_start:
+        try:
+            run_start_h, run_start_m = parse_run_time(args.run_start)
+            run_end_h, run_end_m = parse_run_time(args.run_end)
+        except ValueError as e:
+            parser.error(str(e))
+        if args.run_days:
+            try:
+                run_days = [int(d.strip()) for d in args.run_days.split(',')]
+            except ValueError:
+                parser.error('--run-days must be comma-separated numbers 1-7')
+            for d in run_days:
+                if d < 1 or d > 7:
+                    parser.error('--run-days values must be 1 (Monday) through 7 (Sunday)')
+        else:
+            run_days = [1, 2, 3, 4, 5, 6, 7]
+        run_jitter_minutes = 0
+        if args.run_jitter:
+            try:
+                run_jitter_minutes = parse_run_jitter(args.run_jitter)
+            except ValueError as e:
+                parser.error(str(e))
+        tw = install_time_window(run_start_h, run_start_m, run_end_h, run_end_m,
+                                 run_days, run_jitter_minutes)
+        logging.info(tw.describe())
+        logging.info(tw.describe_forecast())
+        install_ldap_search_counter()
     if args.ldapx_target:
         if args.use_ldaps:
             parser.error("--use-ldaps can't be combined with --ldapx-target; use --ldapx-ldaps for upstream TLS")
@@ -1029,6 +1088,10 @@ def main():
             logging.error('%s', exc)
             sys.exit(1)
         timestamp = resume.timestamp
+        from bloodhound.ad.utils import get_time_window
+        tw = get_time_window()
+        if tw is not None:
+            tw.wait_if_outside()
         bloodhound.run(collect=collect,
                        num_workers=args.workers,
                        disable_pooling=args.disable_pooling,
