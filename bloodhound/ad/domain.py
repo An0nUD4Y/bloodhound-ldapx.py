@@ -579,14 +579,11 @@ class ADDC(ADComputer):
             search_filter,
             attributes=['objectGUID'],
             search_scope=SUBTREE,
-            paged_size=950,
+            paged_size=threshold + 1,
         )
         entries = [e for e in (self.ldap.response or [])
                    if e.get('type', '') != 'searchResRef']
-        has_cookie = bool(_next_page_cookie(self.ldap.result or {}))
-        count = len(entries)
-        exceeds = has_cookie or count > threshold
-        return count, exceeds
+        return len(entries), len(entries) > threshold
 
     def get_groups(self, include_properties=False, acl=False, guid_prefix=None):
         properties = ['distinguishedName', 'samaccountname', 'samaccounttype', 'objectsid', 'member']
