@@ -478,7 +478,7 @@ class BloodHound(object):
         self.ad.create_objectresolver(self.pdc)
 
 
-    def run(self, collect, num_workers=10, disable_pooling=False, timestamp="", computerfile="", cachefile=None, exclude_dcs=False, fileNamePrefix="", resume=None, partition_ldap=False, search_base=None, partition_threshold=1000):
+    def run(self, collect, num_workers=10, disable_pooling=False, timestamp="", computerfile="", cachefile=None, exclude_dcs=False, fileNamePrefix="", resume=None, partition_ldap=False, search_base=None):
         start_time = time.time()
         install_ldap_search_counter()
         if search_base:
@@ -486,7 +486,6 @@ class BloodHound(object):
             logging.info('Scoped enumeration to search base: %s', search_base)
         self.resume = resume
         self.pdc.partition_ldap = partition_ldap
-        self.pdc.partition_threshold = partition_threshold
         if resume is not None:
             timestamp = resume.timestamp
             # The checkpoint prefix is what the output files were named with.
@@ -775,15 +774,6 @@ def main():
                              'objectGUID slices. --ldap-interval applies when a slice starts and '
                              '--ldap-page-interval applies between pages inside a slice. Finished slices '
                              'are skipped on --resume.')
-    coopts.add_argument('--partition-threshold',
-                        metavar='N',
-                        action='store',
-                        type=int,
-                        default=1000,
-                        help='With --partition-ldap, phases with fewer objects than N skip GUID '
-                             'slicing and use a single query instead. Saves 255 throttled queries '
-                             'per small phase. Set to 0 to force slicing on all phases. '
-                             'Default: 1000.')
     coopts.add_argument('--search-base',
                         action='store',
                         metavar='DN',
@@ -1111,8 +1101,7 @@ def main():
                        fileNamePrefix=args.outputprefix,
                        resume=resume,
                        partition_ldap=args.partition_ldap,
-                       search_base=args.search_base,
-                       partition_threshold=args.partition_threshold)
+                       search_base=args.search_base)
         #If args --zip is true, the compress output
         if args.zip:
             logging.info("Compressing output into " + timestamp + "bloodhound.zip")

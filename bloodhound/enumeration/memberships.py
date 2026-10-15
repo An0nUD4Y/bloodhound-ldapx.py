@@ -100,27 +100,12 @@ class MembershipEnumerator(object):
         else:
             self.result_q.put(obj)
 
-    def _collect(self, phase, filename, meta_type, fetch, fill, extras=None, count_filter=None):
+    def _collect(self, phase, filename, meta_type, fetch, fill, extras=None):
         """
         Run one output phase. With --partition-ldap, each objectGUID slice is
-        its own file and a finished slice is skipped on resume.  When
-        --partition-threshold is set and a count query shows fewer objects
-        than the threshold, slicing is skipped for this phase.
+        its own file and a finished slice is skipped on resume.
         """
-        skip_slicing = not getattr(self.addc, 'partition_ldap', False)
-        if not skip_slicing:
-            threshold = getattr(self.addc, 'partition_threshold', 0)
-            if threshold > 0 and count_filter is not None:
-                count, exceeds = self.addc.count_exceeds(count_filter, threshold)
-                if not exceeds:
-                    logging.info('%s: %d objects (threshold %d), using single query',
-                                 phase, count, threshold)
-                    skip_slicing = True
-                else:
-                    logging.info('%s: >%d objects, using GUID slicing (256 queries)',
-                                 phase, threshold)
-
-        if skip_slicing:
+        if not getattr(self.addc, 'partition_ldap', False):
             self.result_q = queue.Queue()
             status = self._start_writer(OutputWorker.membership_write_worker, (self.result_q, meta_type, filename))
             fill(fetch(None))
@@ -328,8 +313,7 @@ class MembershipEnumerator(object):
                 'users', filename, 'users',
                 lambda prefix: self.addc.get_users(include_properties=with_properties, acl=acl, guid_prefix=prefix),
                 lambda found: self._fill_users(found, with_properties, acl),
-                self.write_default_users,
-                count_filter='(&(objectCategory=person)(objectClass=user))')
+                self.write_default_users)
             return
 
         logging.debug('Writing users to file: %s', filename)
@@ -438,8 +422,7 @@ class MembershipEnumerator(object):
                 'groups', filename, 'groups',
                 lambda prefix: self.addc.get_groups(include_properties=with_properties, acl=acl, guid_prefix=prefix),
                 lambda found: self._fill_groups(found, with_properties, acl, is_highvalue),
-                self.write_default_groups,
-                count_filter='(objectClass=group)')
+                self.write_default_groups)
             return
         entries = self.addc.get_groups(include_properties=with_properties, acl=acl)
 
@@ -511,8 +494,7 @@ class MembershipEnumerator(object):
             self._collect(
                 'computers', filename, 'computers',
                 lambda prefix: self.addc.get_computers(include_properties=with_properties, acl=acl, guid_prefix=prefix),
-                lambda found: self._fill_computers(found, acl),
-                count_filter='(sAMAccountType=805306369)')
+                lambda found: self._fill_computers(found, acl))
             return
 
         entries = self.addc.get_computers(include_properties=with_properties, acl=acl)
@@ -601,8 +583,7 @@ class MembershipEnumerator(object):
             self._collect(
                 'gpos', filename, 'gpos',
                 lambda prefix: self.addc.get_gpos(include_properties=with_properties, acl=acl, guid_prefix=prefix),
-                lambda found: self._fill_gpos(found, with_properties, acl),
-                count_filter='(objectCategory=groupPolicyContainer)')
+                lambda found: self._fill_gpos(found, with_properties, acl))
             return
         entries = self.addc.get_gpos(include_properties=with_properties, acl=acl)
 
@@ -808,8 +789,7 @@ class MembershipEnumerator(object):
             self._collect(
                 'ous', filename, 'ous',
                 lambda prefix: self.addc.get_ous(include_properties=with_properties, acl=acl, guid_prefix=prefix),
-                lambda found: self._fill_ous(found, with_properties, acl),
-                count_filter='(objectCategory=organizationalUnit)')
+                lambda found: self._fill_ous(found, with_properties, acl))
             return
         entries = self.addc.get_ous(include_properties=with_properties, acl=acl)
 
@@ -850,8 +830,7 @@ class MembershipEnumerator(object):
             self._collect(
                 'containers', filename, 'containers',
                 lambda prefix: self.addc.get_containers(include_properties=with_properties, acl=acl, guid_prefix=prefix),
-                lambda found: self._fill_containers(found, with_properties, acl),
-                count_filter='(&(objectCategory=container)(objectClass=container))')
+                lambda found: self._fill_containers(found, with_properties, acl))
             return
         entries = self.addc.get_containers(include_properties=with_properties, acl=acl)
 

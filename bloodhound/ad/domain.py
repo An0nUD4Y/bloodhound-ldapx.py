@@ -572,19 +572,6 @@ class ADDC(ADComputer):
                 dncache[ADUtils.get_entry_property(lentry, 'distinguishedName').upper()] = cacheitem
         return dncache, sidcache
 
-    def count_exceeds(self, search_filter, threshold):
-        search_base = self.ad.search_baseDN or self.ad.baseDN
-        self.ldap.search(
-            search_base,
-            search_filter,
-            attributes=['objectGUID'],
-            search_scope=SUBTREE,
-            paged_size=threshold + 1,
-        )
-        entries = [e for e in (self.ldap.response or [])
-                   if e.get('type', '') != 'searchResRef']
-        return len(entries), len(entries) > threshold
-
     def get_groups(self, include_properties=False, acl=False, guid_prefix=None):
         properties = ['distinguishedName', 'samaccountname', 'samaccounttype', 'objectsid', 'member']
         if include_properties:
