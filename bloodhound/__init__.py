@@ -478,7 +478,7 @@ class BloodHound(object):
         self.ad.create_objectresolver(self.pdc)
 
 
-    def run(self, collect, num_workers=10, disable_pooling=False, timestamp="", computerfile="", cachefile=None, exclude_dcs=False, fileNamePrefix="", resume=None, partition_ldap=False, search_base=None):
+    def run(self, collect, num_workers=10, disable_pooling=False, timestamp="", computerfile="", cachefile=None, exclude_dcs=False, fileNamePrefix="", resume=None, partition_ldap=False, search_base=None, partition_auto=False, partition_buffer=1800):
         start_time = time.time()
         install_ldap_search_counter()
         if search_base:
@@ -486,6 +486,8 @@ class BloodHound(object):
             logging.info('Scoped enumeration to search base: %s', search_base)
         self.resume = resume
         self.pdc.partition_ldap = partition_ldap
+        self.pdc.partition_auto = partition_auto
+        self.pdc.partition_buffer = partition_buffer
         if resume is not None:
             timestamp = resume.timestamp
             # The checkpoint prefix is what the output files were named with.
@@ -774,6 +776,18 @@ def main():
                              'objectGUID slices. --ldap-interval applies when a slice starts and '
                              '--ldap-page-interval applies between pages inside a slice. Finished slices '
                              'are skipped on --resume.')
+    coopts.add_argument('--partition-auto',
+                        action='store_true',
+                        help='Automatically decide per phase whether to use GUID slicing or a '
+                             'single query based on estimated enumeration time vs the run window. '
+                             'Requires --partition-ldap and --run-start/--run-end.')
+    coopts.add_argument('--partition-buffer',
+                        metavar='DURATION',
+                        action='store',
+                        default='30m',
+                        help='Safety margin for --partition-auto. If estimated single-query time '
+                             'plus this buffer fits in the run window, use single query. '
+                             'Default: 30m. Same duration syntax (s/m/h).')
     coopts.add_argument('--search-base',
                         action='store',
                         metavar='DN',
@@ -946,6 +960,15 @@ def main():
                                  run_days, run_jitter_minutes)
         logging.info(tw.describe())
         install_ldap_search_counter()
+    if args.partition_auto:
+        if not args.partition_ldap:
+            parser.error('--partition-auto requires --partition-ldap')
+        if not args.run_start:
+            parser.error('--partition-auto requires --run-start and --run-end')
+    try:
+        partition_buffer_seconds = parse_ldap_interval(args.partition_buffer, '--partition-buffer')
+    except ValueError as e:
+        parser.error(str(e))
     if args.ldapx_target:
         if args.use_ldaps:
             parser.error("--use-ldaps can't be combined with --ldapx-target; use --ldapx-ldaps for upstream TLS")
@@ -1101,7 +1124,9 @@ def main():
                        fileNamePrefix=args.outputprefix,
                        resume=resume,
                        partition_ldap=args.partition_ldap,
-                       search_base=args.search_base)
+                       search_base=args.search_base,
+                       partition_auto=args.partition_auto,
+                       partition_buffer=partition_buffer_seconds)
         #If args --zip is true, the compress output
         if args.zip:
             logging.info("Compressing output into " + timestamp + "bloodhound.zip")

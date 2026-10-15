@@ -572,6 +572,34 @@ class ADDC(ADComputer):
                 dncache[ADUtils.get_entry_property(lentry, 'distinguishedName').upper()] = cacheitem
         return dncache, sidcache
 
+    def count_objects(self, search_filter):
+        search_base = self.ad.search_baseDN or self.ad.baseDN
+        self.ldap.search(
+            search_base,
+            search_filter,
+            attributes=['objectGUID'],
+            search_scope=SUBTREE,
+            paged_size=950,
+        )
+        entries = [e for e in (self.ldap.response or [])
+                   if e.get('type', '') != 'searchResRef']
+        total = len(entries)
+        cookie = _next_page_cookie(self.ldap.result or {})
+        while cookie:
+            self.ldap.search(
+                search_base,
+                search_filter,
+                attributes=['objectGUID'],
+                search_scope=SUBTREE,
+                paged_size=950,
+                paged_cookie=cookie,
+            )
+            page = [e for e in (self.ldap.response or [])
+                    if e.get('type', '') != 'searchResRef']
+            total += len(page)
+            cookie = _next_page_cookie(self.ldap.result or {})
+        return total
+
     def get_groups(self, include_properties=False, acl=False, guid_prefix=None):
         properties = ['distinguishedName', 'samaccountname', 'samaccounttype', 'objectsid', 'member']
         if include_properties:

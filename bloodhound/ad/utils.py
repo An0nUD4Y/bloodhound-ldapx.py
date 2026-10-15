@@ -23,6 +23,7 @@
 ####################
 import datetime
 import logging
+import math
 import socket
 import threading
 import time
@@ -986,6 +987,21 @@ class TimeWindow(object):
             else:
                 text += ' (jitter +/-%.0fm)' % self.jitter_minutes
         return text
+
+    def window_seconds(self):
+        start_minutes = self.start[0] * 60 + self.start[1]
+        end_minutes = self.end[0] * 60 + self.end[1]
+        return (end_minutes - start_minutes) * 60
+
+def estimate_phase_time(count, pacer):
+    page_size = 200
+    if pacer is None or (pacer.interval <= 0 and pacer.page_interval <= 0):
+        return 0.0
+    avg_search = pacer.interval * (1.0 + pacer.jitter / 2.0)
+    avg_page = pacer.page_interval * (1.0 + pacer.page_jitter / 2.0)
+    pages = max(1, int(math.ceil(count / float(page_size))))
+    continuations = pages - 1
+    return avg_search + continuations * avg_page
 
 def install_time_window(start_hour, start_minute, end_hour, end_minute,
                         allowed_days, jitter_minutes=0):
