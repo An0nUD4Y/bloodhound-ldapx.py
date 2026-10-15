@@ -33,7 +33,7 @@ from dns import resolver
 from ldap3 import ALL_ATTRIBUTES, BASE, SUBTREE, LEVEL
 from ldap3.core.exceptions import LDAPKeyError, LDAPAttributeError, LDAPCursorError, LDAPNoSuchObjectResult, LDAPSocketReceiveError, LDAPSocketSendError, LDAPCommunicationError
 from ldap3.protocol.microsoft import security_descriptor_control
-from bloodhound.ad.utils import ADUtils, DNSCache, SidCache, SamCache, CollectionException, get_ldap_pacer, ldap_search_count
+from bloodhound.ad.utils import ADUtils, DNSCache, SidCache, SamCache, CollectionException, get_ldap_pacer, get_time_window, estimate_phase_time, format_duration, ldap_search_count, set_count_mode, start_phase
 from bloodhound.ad.computer import ADComputer
 from bloodhound.enumeration.objectresolver import ObjectResolver
 from bloodhound.enumeration.resume import GUID_SLICES, guid_filter
@@ -410,6 +410,7 @@ class ADDC(ADComputer):
         """
         Function to get objecttype GUID
         """
+        start_phase('SCHEMA')
         logging.info('Collecting schema')
         started = ldap_search_count()
         resume = getattr(self, 'resume', None)
@@ -421,7 +422,31 @@ class ADDC(ADComputer):
         if self.ldap is None:
             self.ldap_connect()
 
-        prefixes = GUID_SLICES if self.partition_ldap else [None]
+        use_slicing = self.partition_ldap
+        if use_slicing and getattr(self, 'partition_auto', False):
+            tw = get_time_window()
+            pacer = get_ldap_pacer()
+            window = tw.window_seconds() if tw is not None else None
+            buffer_s = getattr(self, 'partition_buffer', 1800)
+            available = (window - buffer_s) if window is not None else None
+            schema_filter = '(objectClass=*)'
+            count = self.count_objects(schema_filter, early_exit_seconds=available,
+                                       search_base_override=self.ldap.server.info.other['schemaNamingContext'][0])
+            t_original = estimate_phase_time(count, pacer)
+            if available is None or t_original <= available:
+                logging.info(
+                    'schema: %d objects, estimated %s (fits in %s window with %s buffer) -> single query',
+                    count, format_duration(t_original),
+                    format_duration(window) if window is not None else 'no',
+                    format_duration(buffer_s))
+                use_slicing = False
+            else:
+                logging.info(
+                    'schema: %d objects, estimated %s (exceeds %s window with %s buffer) -> GUID slicing',
+                    count, format_duration(t_original),
+                    format_duration(window), format_duration(buffer_s))
+
+        prefixes = GUID_SLICES if use_slicing else [None]
         for prefix in prefixes:
             if prefix and resume is not None and resume.slice_done('schema', prefix):
                 logging.info('Skipping schema slice %s', prefix)
@@ -572,27 +597,54 @@ class ADDC(ADComputer):
                 dncache[ADUtils.get_entry_property(lentry, 'distinguishedName').upper()] = cacheitem
         return dncache, sidcache
 
-    def count_objects(self, search_filter):
-        search_base = self.ad.search_baseDN or self.ad.baseDN
+    def count_objects(self, search_filter, early_exit_seconds=None, search_base_override=None):
+        search_base = search_base_override or self.ad.search_baseDN or self.ad.baseDN
+        set_count_mode(True)
+        try:
+            return self._count_objects_paged(search_base, search_filter, early_exit_seconds)
+        finally:
+            set_count_mode(False)
+
+    def _count_objects_paged(self, search_base, search_filter, early_exit_seconds):
+        from bloodhound.ad.utils import estimate_phase_time, get_ldap_pacer
+        paged_size = 1000
         self.ldap.search(
-            search_base,
-            search_filter,
-            attributes=['objectGUID'],
-            search_scope=SUBTREE,
-            paged_size=950,
+            search_base, search_filter,
+            attributes=['1.1'], search_scope=SUBTREE,
+            paged_size=paged_size,
         )
         entries = [e for e in (self.ldap.response or [])
                    if e.get('type', '') != 'searchResRef']
         total = len(entries)
         cookie = _next_page_cookie(self.ldap.result or {})
+        if not cookie:
+            if total == paged_size:
+                paged_size = 1500
+                self.ldap.search(
+                    search_base, search_filter,
+                    attributes=['1.1'], search_scope=SUBTREE,
+                    paged_size=paged_size,
+                )
+                entries = [e for e in (self.ldap.response or [])
+                           if e.get('type', '') != 'searchResRef']
+                total = len(entries)
+                cookie = _next_page_cookie(self.ldap.result or {})
+                if not cookie:
+                    return total
+            else:
+                return total
+        if early_exit_seconds is not None:
+            pacer = get_ldap_pacer()
+            if pacer is not None:
+                t_min = estimate_phase_time(total + 1, pacer)
+                if t_min > early_exit_seconds:
+                    logging.debug('count early exit: %d+ objects already exceeds window', total)
+                    return total
         while cookie:
             self.ldap.search(
-                search_base,
-                search_filter,
-                attributes=['objectGUID'],
-                search_scope=SUBTREE,
-                paged_size=950,
-                paged_cookie=cookie,
+                search_base, search_filter,
+                attributes=['1.1'], search_scope=SUBTREE,
+                paged_size=paged_size, paged_cookie=cookie,
             )
             page = [e for e in (self.ldap.response or [])
                     if e.get('type', '') != 'searchResRef']
@@ -803,6 +855,7 @@ class ADDC(ADComputer):
     def prefetch_info(self, props=False, acls=False, cache_computers=False, skip_schema=False):
         if not skip_schema:
             self.get_objecttype()
+        start_phase('SETUP')
         started = ldap_search_count()
         self.get_domains(acl=acls)
         self.get_forest_domains()

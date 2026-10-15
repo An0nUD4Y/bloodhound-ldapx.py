@@ -11,12 +11,13 @@ It can send those searches through a managed [ldapx](https://github.com/Macmod/l
 
 - **ldapx proxy.** BloodHound starts ldapx, rewrites each search (filter, attribute list, and base DN), and forwards it to the DC. `--ldapx-ldaps` uses LDAPS upstream. TLS satisfies LDAP signing, and ldapx injects the channel binding. `-k` reuses a cached TGT or `ldap/<dc>` service ticket.
 - **SOCKS5.** `--ldapx-socks` sends both the ldapx upstream connection and Kerberos TCP/88 through one proxy.
-- **Two LDAP waits.** `--ldap-interval` spaces new searches and `member;range=` follow-ups. `--ldap-page-interval` spaces continuation pages of the same search. Each wait has its own jitter, and jitter only makes the gap longer.
+- **Two enumeration waits.** `--enum-interval` spaces new searches and `member;range=` follow-ups. `--enum-page-interval` spaces continuation pages of the same search. Each wait has its own jitter, and jitter only makes the gap longer.
+- **Auto partition.** `--partition-auto` estimates each phase's run time from object count and pacing settings, and picks single query or GUID slicing per phase based on whether it fits the time window.
 - **Host throttle.** `--throttle` spaces Session, LocalAdmin, LoggedOn, RDP, DCOM, PSRemote, and Experimental RPC calls. Its jitter can make one wait shorter or longer. Durations accept `ms`, `s`, `m`, and `h`.
 - **Large searches.** `--partition-ldap` splits schema, users, groups, computers, GPOs, OUs, and containers into 256 `objectGUID` slices.
 - **Resume.** `--resume` keeps finished JSON and continues at the next phase, or at the next unfinished slice when partitioning is on. Works with or without `--outputprefix`.
 - **Safe JSON.** Each output file is written to a partial file and renamed only after the `meta` footer is flushed.
-- **Progress.** The console prints one line when a phase starts, `Found N users` when it finishes, and `users: 14 LDAP searches` for that section. Page lines such as `Schema page 4, 300 objects` appear while an LDAP interval is set.
+- **Progress.** The console prints one line when a phase starts, `Found N users` when it finishes, and `users: 14 LDAP searches` for that section. Page lines such as `Schema page 4, 300 objects` appear while an enumeration interval is set.
 
 ## Installation
 There are different install methods for BloodHound Community Edition (CE) and BloodHound legacy. You can only have one of the two tools installed at the same time, unless you use a virtual environment for both tools, or a package manager like pipx that automatically sets these up.
@@ -65,11 +66,11 @@ Multiple collectionmethods should be separated by a comma, for example: `-c Grou
 
 You can override some of the automatic detection options, such as the hostname of the primary Domain Controller if you want to use a different Domain Controller with `-dc`, or specify your own Global Catalog with `-gc`.
 
-Host collection (`LocalAdmin`, `Session`, `LoggedOn`, `DCOM`, `RDP`, `PSRemote`, `Experimental`) connects to computers over SMB/RPC. It does not go through ldapx. `--ldap-interval` does not slow those calls; `--throttle` does. With `--ldapx-target`, collect with `DCOnly` (or `Group`, `ACL`, `Trusts`, `ObjectProps`, `Container`) so every query stays on the Domain Controller path.
+Host collection (`LocalAdmin`, `Session`, `LoggedOn`, `DCOM`, `RDP`, `PSRemote`, `Experimental`) connects to computers over SMB/RPC. It does not go through ldapx. The `--enum-*` pacing flags do not slow those calls; `--throttle` does. With `--ldapx-target`, collect with `DCOnly` (or `Group`, `ACL`, `Trusts`, `ObjectProps`, `Container`) so every query stays on the Domain Controller path.
 
 ## Examples
 
-**OPSEC-safe :** Keep new LDAP searches in the 2–5 minute band, continuation pages in the 5–20 second band, and host RPC calls in the 3–10 minute band. Jitter on both LDAP waits is 50% and only lengthens the minimum, so the flags use the bottom of each band: searches wait 2m–3m and pages wait 5–7.5s. Host jitter is also 50% and moves a 6m throttle to 3–9m. The console stays at info level. The debug trace, including each ldapx rewrite, goes to `corp-opsec.log`.
+**OPSEC-safe :** Keep new LDAP searches in the 2–5 minute band, continuation pages in the 5–20 second band, and host RPC calls in the 3–10 minute band. Jitter on both enumeration waits is 50% and only lengthens the minimum, so the flags use the bottom of each band: searches wait 2m–3m and pages wait 5–7.5s. Host jitter is also 50% and moves a 6m throttle to 3–9m. The console stays at info level. The debug trace, including each ldapx rewrite, goes to `corp-opsec.log`.
 THIS MAY TAKE FEW HOURS TO DAYS TO COMPLETE, Please test in lab and modify the sleep times accordingly.
 
 ```
@@ -78,8 +79,8 @@ bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   --ldapx-target 10.1.1.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080 \
   --ldapx-filter OGDR --ldapx-attrlist Owp --ldapx-basedn OX \
-  --ldap-interval 1m --ldap-jitter 50 \
-  --ldap-page-interval 8s --ldap-page-jitter 50 \
+  --enum-interval 1m --enum-jitter 50 \
+  --enum-page-interval 8s --enum-page-jitter 50 \
   --throttle 3m --throttle-jitter 50 \
   --log-file bloodhound-logs.log -v
 ```
@@ -93,8 +94,8 @@ bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   --ldapx-target 10.1.1.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080 \
   --ldapx-filter OGDR --ldapx-attrlist Owp --ldapx-basedn OX \
-  --ldap-interval 4s --ldap-jitter 20 \
-  --ldap-page-interval 2s --ldap-page-jitter 40 \
+  --enum-interval 4s --enum-jitter 20 \
+  --enum-page-interval 2s --enum-page-jitter 40 \
   --log-file corp.log
 ```
 
@@ -106,8 +107,8 @@ bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   --ldapx-target 10.1.1.1:636 --ldapx-ldaps \
   --ldapx-socks socks5://127.0.0.1:1080 \
   --ldapx-filter OGDR --ldapx-attrlist Owp --ldapx-basedn OX \
-  --ldap-interval 4s --ldap-jitter 20 \
-  --ldap-page-interval 2s --ldap-page-jitter 40 \
+  --enum-interval 4s --enum-jitter 20 \
+  --enum-page-interval 2s --enum-page-jitter 40 \
   --log-file corp.log
 ```
 
@@ -116,8 +117,8 @@ A directory of about 20000 objects, split into `objectGUID` slices. The 30s sear
 ```
 bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   -c DCOnly --outputprefix corp --partition-ldap \
-  --ldap-interval 30s --ldap-jitter 20 \
-  --ldap-page-interval 5s --ldap-page-jitter 40 \
+  --enum-interval 30s --enum-jitter 20 \
+  --enum-page-interval 5s --enum-page-jitter 40 \
   --log-file corp.log
 ```
 
@@ -126,8 +127,8 @@ All collection methods, including host RPC. LDAP uses the two intervals above. E
 ```
 bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local \
   -c All --outputprefix corp \
-  --ldap-interval 4s --ldap-jitter 20 \
-  --ldap-page-interval 2s --ldap-page-jitter 40 \
+  --enum-interval 4s --enum-jitter 20 \
+  --enum-page-interval 2s --enum-page-jitter 40 \
   --throttle 1s --throttle-jitter 20 \
   --log-file corp.log
 ```
@@ -187,29 +188,33 @@ Channel binding and signing: with `--ldapx-ldaps`, BloodHound requests the `ldap
 
 Both ldapx processes are stopped automatically when BloodHound exits.
 
-## LDAP pacing
+## Enumeration pacing
 To avoid tripping an LDAP query-rate threshold on a Domain Controller, you can slow BloodHound down so it trickles LDAP searches instead of bursting them.
 
 | Flag | Default | What it does |
 | --- | --- | --- |
-| `--ldap-interval DURATION` | off | Minimum wait before a new LDAP search and before each `member;range=` follow-up, measured from when the previous search finished. A plain number is seconds. Suffixes `s`, `m` and `h` are accepted (`300`, `300s`, `5m`, `1h`). Continuation pages use `--ldap-page-interval` instead. |
-| `--ldap-jitter PERCENT` | `0` | Extra random delay on top of `--ldap-interval` only. Range 0–100. The extra wait is `0` to `interval * PERCENT/100`, so a gap only gets longer. Requires `--ldap-interval`. |
-| `--ldap-page-interval DURATION` | off | Minimum wait before a continuation page, the request that sends the previous paging cookie. Same duration syntax as `--ldap-interval`. Off by default, so later pages follow as soon as the previous page returns. |
-| `--ldap-page-jitter PERCENT` | `0` | Extra random delay on top of `--ldap-page-interval` only. Range 0–100. Requires `--ldap-page-interval`. |
+| `--enum-interval DURATION` | off | Minimum wait before a new LDAP search and before each `member;range=` follow-up, measured from when the previous search finished. A plain number is seconds. Suffixes `s`, `m` and `h` are accepted (`300`, `300s`, `5m`, `1h`). Continuation pages use `--enum-page-interval` instead. |
+| `--enum-jitter PERCENT` | `0` | Extra random delay on top of `--enum-interval` only. Range 0–100. The extra wait is `0` to `interval * PERCENT/100`, so a gap only gets longer. Requires `--enum-interval`. |
+| `--enum-page-interval DURATION` | off | Minimum wait before a continuation page, the request that sends the previous paging cookie. Same duration syntax as `--enum-interval`. Off by default, so later pages follow as soon as the previous page returns. |
+| `--enum-page-jitter PERCENT` | `0` | Extra random delay on top of `--enum-page-interval` only. Range 0–100. Requires `--enum-page-interval`. |
 | `--throttle DURATION` | off | Minimum spacing between host RPC calls (Session, LocalAdmin, LoggedOn, RDP, DCOM, PSRemote, Experimental). A plain number is milliseconds. Suffixes `ms`, `s`, `m` and `h` are accepted (`500`, `500ms`, `2s`, `1m`). |
 | `--throttle-jitter PERCENT` | `0` | Moves a host wait both below and above `--throttle`. The wait is never negative. Requires `--throttle`. |
-| `--partition-ldap` | off | Split schema, users, groups, computers, GPOs, OUs and containers into 256 `objectGUID` slices. `--ldap-interval` spaces the slices. `--ldap-page-interval` spaces pages inside a slice. `--resume` skips finished slices. |
+| `--count-interval DURATION` | off | Minimum wait between LDAP queries used to count objects before each phase (for `--partition-auto`). Same duration syntax. Separate from `--enum-interval` so counting is fast while enumeration stays slow. |
+| `--count-jitter PERCENT` | `0` | Extra random delay on top of `--count-interval`. Range 0–100. Requires `--count-interval`. |
+| `--partition-ldap` | off | Split schema, users, groups, computers, GPOs, OUs and containers into 256 `objectGUID` slices. `--enum-interval` spaces the slices. `--enum-page-interval` spaces pages inside a slice. `--resume` skips finished slices. |
+| `--partition-auto` | off | Per-phase automatic selection of GUID slicing vs single query. Estimates each phase's run time from the object count and pacing settings, and compares it to the time window (`--run-start`/`--run-end`). Phases that fit in the window use a single query; phases that don't use GUID slicing for incremental resume. Requires `--partition-ldap` and `--run-start`/`--run-end`. |
+| `--partition-buffer DURATION` | `30m` | Safety margin subtracted from the time window when `--partition-auto` decides. A phase must finish within `window - buffer` to use a single query. |
 
 At startup BloodHound logs the active setting, for example `New LDAP searches at least 30s apart, plus 0-20% jitter. LDAP pages at least 5s apart, plus 0-40% jitter`. The first search is immediate.
 
-A directory of about 20000 objects is about 100 pages at 200 objects per page, about 20 new DCOnly searches, and about 100 continuation pages. `--ldap-interval 30s --ldap-jitter 20` keeps those new searches 30–36 seconds apart, about 11 minutes. `--ldap-page-interval 5s --ldap-page-jitter 40` keeps the later pages 5.0–7.0 seconds apart, about 10 minutes. Together that is about 21 minutes plus response time. Setting only the search interval pulls the 100 pages as fast as the domain controller answers.
+A directory of about 20000 objects is about 100 pages at 200 objects per page, about 20 new DCOnly searches, and about 100 continuation pages. `--enum-interval 30s --enum-jitter 20` keeps those new searches 30–36 seconds apart, about 11 minutes. `--enum-page-interval 5s --enum-page-jitter 40` keeps the later pages 5.0–7.0 seconds apart, about 10 minutes. Together that is about 21 minutes plus response time. Setting only the search interval pulls the 100 pages as fast as the domain controller answers.
 
-What waits for `--ldap-interval`:
+What waits for `--enum-interval`:
 - The first page of each search, including each `objectGUID` slice when `--partition-ldap` is set.
 - Every `member;range=` follow-up. A group that contains all users is returned 1500 members at a time, so one large group is tens of extra searches.
 - The rootDSE/schema server-info reads. When pacing is on these are read once on the first bind and reused.
 
-What waits for `--ldap-page-interval`:
+What waits for `--enum-page-interval`:
 - Every later page of a paged search. BloodHound reads 200 objects per page. Each later page still sends the cookie from the page before it.
 
 LDAP binds are not paced. Host SMB/RPC calls are paced only by `--throttle`. Because a wait is a plain sleep before the request (not a socket timeout), a long interval will not time the LDAP connection out; TCP keepalive is enabled to keep the session from being dropped as idle. A long sleep on a live connection does not request that page again. If the connection drops, BloodHound reconnects and sends that same cookie. Active Directory discards the paged result set with the connection and rejects the cookie (LDAP 00002040). The run stops there, with the pages already read left unrepeated, instead of starting that search again from the first page. Five failed reconnect attempts on the same page stop the run as well. With `--partition-ldap`, a crash repeats the open slice rather than the whole phase.
@@ -239,7 +244,7 @@ bloodhound-ce-ldapx -u USER -p PASS -d domain.local -c DCOnly --outputprefix cor
 - BloodHound's own debug trace (collection, Kerberos, pacing, output files)
 - ldapx startup and, for every search, the middleware steps, the original filter, and the rewritten filter sent to the DC
 
-LDAP response bodies are not written, so a domain's search results and schema do not land in the file. The console stays at the normal info level unless you also pass `-v`. A collection prints one info line as each phase starts (`Collecting users`), `Found 20 users` when it finishes, and `users: 14 LDAP searches` for how many LDAP searches that section sent. While either LDAP interval is set, each finished page also adds one line such as `Schema page 4, 300 objects`. Without an interval those page lines stay in the debug log. With both `-v` and `--log-file`, `-v` prints debug to the console as well, and ldapx still omits response bodies so the log file stays readable.
+LDAP response bodies are not written, so a domain's search results and schema do not land in the file. The console stays at the normal info level unless you also pass `-v`. A collection prints one info line as each phase starts (`Collecting users`), `Found 20 users` when it finishes, and `users: 14 LDAP searches` for how many LDAP searches that section sent. While either enumeration interval is set, each finished page also adds one line such as `Schema page 4, 300 objects`. Without an interval those page lines stay in the debug log. With both `-v` and `--log-file`, `-v` prints debug to the console as well, and ldapx still omits response bodies so the log file stays readable.
 
 ```
 bloodhound-ce-ldapx -u USER -p PASS -d domain.local -c DCOnly --log-file bloodhound.log
@@ -257,7 +262,7 @@ bloodhound-ce-ldapx -u USER -p PASS -d domain.local -dc dc01.domain.local -c DCO
   --ldapx-target 10.1.1.1:389 \
   --ldapx-socks socks5://127.0.0.1:1080 \
   --ldapx-filter OGDR --ldapx-attrlist Owp --ldapx-basedn OX \
-  --ldap-interval 2s --ldap-jitter 50 \
+  --enum-interval 2s --enum-jitter 50 \
   --zip --outputprefix domain \
   --log-file domain.log
 ```
@@ -282,7 +287,7 @@ Changed Search
 
 6. Output files are written in the current directory: `domain_<timestamp>_users.json`, `_computers.json`, `_groups.json`, `_domains.json`, `_gpos.json`, `_ous.json`, and `_containers.json`. `--zip` packs those JSON files into `domain_<timestamp>_bloodhound.zip` and removes the loose JSON. Import that zip into BloodHound CE.
 
-Raise `--ldap-interval` once the short run looks right. A 2 second interval is only for a functional check. The runtime estimates in the pacing section are the ones to use on a production domain.
+Raise `--enum-interval` once the short run looks right. A 2-second interval is only for a functional check. The runtime estimates in the Enumeration pacing section are the ones to use on a production domain.
 
 ## Limitations
 BloodHound.py currently has the following limitations:

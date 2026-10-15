@@ -26,7 +26,7 @@ import logging
 import queue
 import threading
 import calendar
-from bloodhound.ad.utils import ADUtils, AceResolver, CollectionException, ldap_search_count, get_time_window, get_ldap_pacer, estimate_phase_time, format_duration
+from bloodhound.ad.utils import ADUtils, AceResolver, CollectionException, ldap_search_count, get_time_window, get_ldap_pacer, estimate_phase_time, format_duration, start_phase
 from bloodhound.ad.computer import ADComputer
 from bloodhound.ad.structures import LDAP_SID
 from bloodhound.enumeration.acls import AclEnumerator, parse_binary_acl
@@ -111,23 +111,23 @@ class MembershipEnumerator(object):
         if not skip_slicing and getattr(self.addc, 'partition_auto', False) and count_filter is not None:
             tw = get_time_window()
             pacer = get_ldap_pacer()
-            if tw is not None and pacer is not None:
-                count = self.addc.count_objects(count_filter)
-                t_original = estimate_phase_time(count, pacer)
-                window = tw.window_seconds()
-                buffer_s = getattr(self.addc, 'partition_buffer', 1800)
-                available = window - buffer_s
-                if t_original <= available:
-                    logging.info(
-                        '%s: %d objects, estimated %s (fits in %s window with %s buffer) -> single query',
-                        phase, count, format_duration(t_original),
-                        format_duration(window), format_duration(buffer_s))
-                    skip_slicing = True
-                else:
-                    logging.info(
-                        '%s: %d objects, estimated %s (exceeds %s window with %s buffer) -> GUID slicing',
-                        phase, count, format_duration(t_original),
-                        format_duration(window), format_duration(buffer_s))
+            window = tw.window_seconds() if tw is not None else None
+            buffer_s = getattr(self.addc, 'partition_buffer', 1800)
+            available = (window - buffer_s) if window is not None else None
+            count = self.addc.count_objects(count_filter, early_exit_seconds=available)
+            t_original = estimate_phase_time(count, pacer)
+            if available is None or t_original <= available:
+                logging.info(
+                    '%s: %d objects, estimated %s (fits in %s window with %s buffer) -> single query',
+                    phase, count, format_duration(t_original),
+                    format_duration(window) if window is not None else 'no',
+                    format_duration(buffer_s))
+                skip_slicing = True
+            else:
+                logging.info(
+                    '%s: %d objects, estimated %s (exceeds %s window with %s buffer) -> GUID slicing',
+                    phase, count, format_duration(t_original),
+                    format_duration(window), format_duration(buffer_s))
 
         if skip_slicing:
             self.result_q = queue.Queue()
@@ -323,6 +323,7 @@ class MembershipEnumerator(object):
             self.result_q.put(user)
 
     def enumerate_users(self, timestamp="", fileNamePrefix=""):
+        start_phase('USERS')
         filename = output_filename(fileNamePrefix, timestamp, 'users.json')
         if not prepare_phase(self.resume, 'users', filename, 'users'):
             return
@@ -425,6 +426,7 @@ class MembershipEnumerator(object):
             self.result_q.put(group)
 
     def enumerate_groups(self, timestamp="", fileNamePrefix=""):
+        start_phase('GROUPS')
 
         highvalue = ["S-1-5-32-544", "S-1-5-32-550", "S-1-5-32-549", "S-1-5-32-551", "S-1-5-32-548"]
 
@@ -510,6 +512,7 @@ class MembershipEnumerator(object):
         Enumerate computer objects. This function is only used if no
         collection was requested that required connecting to computers anyway.
         '''
+        start_phase('COMPUTERS')
         filename = output_filename(fileNamePrefix, timestamp, 'computers.json')
         if not prepare_phase(self.resume, 'computers', filename, 'computers'):
             return
@@ -599,6 +602,7 @@ class MembershipEnumerator(object):
             self.result_q.put(gpo)
 
     def enumerate_gpos(self, timestamp ="", fileNamePrefix=""):
+        start_phase('GPOS')
         filename = output_filename(fileNamePrefix, timestamp, 'gpos.json')
         if not prepare_phase(self.resume, 'gpos', filename, 'gpos'):
             return
@@ -807,6 +811,7 @@ class MembershipEnumerator(object):
             self._process_container(entry, with_properties, acl)
 
     def enumerate_ous(self, timestamp ="", fileNamePrefix=""):
+        start_phase('OUS')
         filename = output_filename(fileNamePrefix, timestamp, 'ous.json')
         if not prepare_phase(self.resume, 'ous', filename, 'ous'):
             return
@@ -849,6 +854,7 @@ class MembershipEnumerator(object):
         logging.debug('Finished writing OU')
 
     def enumerate_containers(self, timestamp ="", fileNamePrefix=""):
+        start_phase('CONTAINERS')
         filename = output_filename(fileNamePrefix, timestamp, 'containers.json')
         if not prepare_phase(self.resume, 'containers', filename, 'containers'):
             return

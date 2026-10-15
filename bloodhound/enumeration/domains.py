@@ -27,7 +27,7 @@ import codecs
 import json
 import calendar
 import os
-from bloodhound.ad.utils import ADUtils, AceResolver, ldap_search_count
+from bloodhound.ad.utils import ADUtils, AceResolver, ldap_search_count, start_phase
 from bloodhound.ad.trusts import ADDomainTrust
 from bloodhound.enumeration.acls import parse_binary_acl
 from bloodhound.enumeration.resume import finish_phase, output_filename, prepare_phase
@@ -48,6 +48,7 @@ class DomainEnumerator(object):
         self.resume = None
 
     def dump_domain(self, collect, timestamp="", filename='domains.json', fileNamePrefix=""):
+        start_phase('TRUSTS')
         filename = output_filename(fileNamePrefix, timestamp, 'domains.json')
         if not prepare_phase(self.resume, 'domains', filename, 'domains'):
             return

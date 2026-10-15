@@ -44,7 +44,7 @@ except Exception:
 
 from bloodhound.ad.domain import AD, ADDC
 from bloodhound.ad.authentication import ADAuthentication, enable_kerberos_socks, disable_kerberos_socks
-from bloodhound.ad.utils import ADUtils, CollectionException, parse_ldap_interval, parse_throttle, parse_run_time, parse_run_jitter, install_ldap_pacing, install_ldap_search_counter, install_host_pacing, install_time_window, ldap_search_count
+from bloodhound.ad.utils import ADUtils, CollectionException, parse_ldap_interval, parse_throttle, parse_run_time, parse_run_jitter, install_ldap_pacing, install_ldap_search_counter, install_host_pacing, install_count_pacing, install_time_window, ldap_search_count, get_phase, set_phase, start_phase, set_phase_sequence
 from bloodhound.ldapxbin import LDAPX_VERSION, resolve_ldapx_binary
 from bloodhound.enumeration.computers import ComputerEnumerator
 from bloodhound.enumeration.memberships import MembershipEnumerator
@@ -504,6 +504,24 @@ class BloodHound(object):
             logging.info('Skipping schema, checkpoint has %d types', len(resume.schema_map))
             self.pdc.restore_objecttype(resume.schema_map)
 
+        phase_names = []
+        if not skip_schema:
+            phase_names.append('SCHEMA')
+        phase_names.append('SETUP')
+        if 'group' in collect or 'objectprops' in collect or 'acl' in collect:
+            phase_names.extend(['USERS', 'GROUPS'])
+            if 'container' in collect:
+                phase_names.extend(['GPOS', 'OUS', 'CONTAINERS'])
+            phase_names.append('COMPUTERS')
+        elif 'container' in collect:
+            phase_names.extend(['GPOS', 'OUS', 'CONTAINERS'])
+        if 'trusts' in collect or 'acl' in collect or 'objectprops' in collect:
+            phase_names.append('TRUSTS')
+        if do_computer_enum:
+            phase_names.append('HOSTS')
+        set_phase_sequence(len(phase_names))
+        logging.info('Collection plan (%d phases): %s', len(phase_names), ' -> '.join(phase_names))
+
         if 'group' in collect or 'objectprops' in collect or 'acl' in collect:
             # Fetch domains for later, computers if needed
             self.pdc.prefetch_info('objectprops' in collect, 'acl' in collect, cache_computers=cache_computers, skip_schema=skip_schema)
@@ -537,6 +555,7 @@ class BloodHound(object):
             computer_enum = ComputerEnumerator(self.ad, self.pdc, collect, do_gc_lookup=have_gc, computerfile=computerfile, exclude_dcs=exclude_dcs)
             computer_enum.resume = resume
             computer_enum.enumerate_computers(self.ad.computers, num_workers=num_workers, timestamp=timestamp, fileNamePrefix=fileNamePrefix)
+        set_phase(None)
         end_time = time.time()
         minutes, seconds = divmod(int(end_time-start_time),60)
         logging.info('Done in %02dM %02dS' % (minutes, seconds))
@@ -588,6 +607,18 @@ def resolve_collection_methods(methods):
             logging.error('Invalid collection method specified: %s', method)
             return False
 
+class PhaseFormatter(logging.Formatter):
+    def format(self, record):
+        phase = get_phase()
+        if phase:
+            saved = record.levelname
+            record.levelname = '[%s][%s]' % (phase, saved)
+            result = super().format(record)
+            record.levelname = saved
+            return result
+        return super().format(record)
+
+
 def main():
 #    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
@@ -595,10 +626,11 @@ def main():
     logger.setLevel(logging.INFO)
     stream = logging.StreamHandler(sys.stderr)
     stream.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(levelname)s: %(message)s')
-#    formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+    formatter = PhaseFormatter('%(levelname)s: %(message)s')
+#    formatter = PhaseFormatter('%(asctime)s %(levelname)s: %(message)s')
     stream.setFormatter(formatter)
     logger.addHandler(stream)
+    set_phase('INIT')
 
     parser = argparse.ArgumentParser(add_help=True, description='Python based ingestor for BloodHound Community Edition\nFor help or reporting issues, visit https://github.com/dirkjanm/BloodHound.py', formatter_class=BloodHoundHelpFormatter)
 
@@ -721,41 +753,53 @@ def main():
                         action='store_true',
                         help='Use LDAP over TLS on port 636 by default. Don\'t use while using with built in ldapx '
                              '(use --ldapx-ldaps for upstream TLS instead).')
-    coopts.add_argument('--ldap-interval',
+    coopts.add_argument('--enum-interval',
                         metavar='DURATION',
                         action='store',
-                        help='Wait at least this long before a new LDAP search and before each '
+                        help='Wait at least this long before a new enumeration LDAP search and before each '
                              'member;range= follow-up, measured from when the previous search finished. '
-                             'A continuation page uses --ldap-page-interval instead. Plain number is seconds; '
+                             'A continuation page uses --enum-page-interval instead. Plain number is seconds; '
                              'suffixes s/m/h (e.g. 300, 300s, 5m, 1h). Off by default.\n'
                              '\n'
                              'Note: a directory of about 20000 objects is about 100 pages and about 20 new '
                              'DCOnly searches. 30s + 20%% jitter keeps those searches 30-36s apart, about 11 minutes. '
-                             'Pages are not delayed unless --ldap-page-interval is set.')
-    coopts.add_argument('--ldap-jitter',
+                             'Pages are not delayed unless --enum-page-interval is set.')
+    coopts.add_argument('--enum-jitter',
                         metavar='PERCENT',
                         action='store',
                         type=float,
                         default=0,
-                        help='Extra delay on top of --ldap-interval, rolled fresh for each new search. '
+                        help='Extra delay on top of --enum-interval, rolled fresh for each new search. '
                              '0-100, default 0. The extra delay is 0 to (interval * PERCENT/100). '
-                             'Requires --ldap-interval. Does not apply to continuation pages.')
-    coopts.add_argument('--ldap-page-interval',
+                             'Requires --enum-interval. Does not apply to continuation pages.')
+    coopts.add_argument('--enum-page-interval',
                         metavar='DURATION',
                         action='store',
                         help='Wait at least this long before a continuation page, the search that sends '
-                             'the previous paging cookie. Same duration syntax as --ldap-interval. '
+                             'the previous paging cookie. Same duration syntax as --enum-interval. '
                              'Off by default, so later pages follow as soon as the previous page returns.\n'
                              '\n'
                              'Note: about 20000 objects is about 100 continuation pages. 5s + 40%% jitter '
                              'keeps those pages 5.0-7.0s apart, about 10 minutes.')
-    coopts.add_argument('--ldap-page-jitter',
+    coopts.add_argument('--enum-page-jitter',
                         metavar='PERCENT',
                         action='store',
                         type=float,
                         default=0,
-                        help='Extra delay on top of --ldap-page-interval, rolled fresh for each continuation '
-                             'page. 0-100, default 0. Requires --ldap-page-interval.')
+                        help='Extra delay on top of --enum-page-interval, rolled fresh for each continuation '
+                             'page. 0-100, default 0. Requires --enum-page-interval.')
+    coopts.add_argument('--count-interval',
+                        metavar='DURATION',
+                        action='store',
+                        help='Wait at least this long between LDAP searches used by --partition-auto '
+                             'to count objects per phase. Same duration syntax (s/m/h). Off by default.')
+    coopts.add_argument('--count-jitter',
+                        metavar='PERCENT',
+                        action='store',
+                        type=float,
+                        default=0,
+                        help='Extra delay on top of --count-interval. 0-100, default 0. '
+                             'Requires --count-interval.')
     coopts.add_argument('--throttle',
                         metavar='DURATION',
                         action='store',
@@ -773,8 +817,8 @@ def main():
     coopts.add_argument('--partition-ldap',
                         action='store_true',
                         help='Split schema, users, groups, computers, GPOs, OUs and containers into 256 '
-                             'objectGUID slices. --ldap-interval applies when a slice starts and '
-                             '--ldap-page-interval applies between pages inside a slice. Finished slices '
+                             'objectGUID slices. --enum-interval applies when a slice starts and '
+                             '--enum-page-interval applies between pages inside a slice. Finished slices '
                              'are skipped on --resume.')
     coopts.add_argument('--partition-auto',
                         action='store_true',
@@ -897,8 +941,8 @@ def main():
         except OSError as exc:
             parser.error('Could not open --log-file %s: %s' % (args.log_file, exc))
         file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s',
-                                                    datefmt='%Y-%m-%d %H:%M:%S'))
+        file_handler.setFormatter(PhaseFormatter('%(asctime)s %(levelname)s: %(message)s',
+                                                  datefmt='%Y-%m-%d %H:%M:%S'))
         logger.addHandler(file_handler)
 
     logging.info('BloodHound.py for BloodHound Community Edition')
@@ -909,19 +953,24 @@ def main():
     # (including the rootDSE discovery in ldapx mode). parser.error() exits
     # with a usage message instead of a traceback.
     try:
-        ldap_interval_seconds = parse_ldap_interval(args.ldap_interval)
-        ldap_page_interval_seconds = parse_ldap_interval(args.ldap_page_interval, '--ldap-page-interval')
+        enum_interval_seconds = parse_ldap_interval(args.enum_interval, '--enum-interval')
+        enum_page_interval_seconds = parse_ldap_interval(args.enum_page_interval, '--enum-page-interval')
+        count_interval_seconds = parse_ldap_interval(args.count_interval, '--count-interval')
         throttle_ms = parse_throttle(args.throttle)
     except ValueError as e:
         parser.error(str(e))
-    if args.ldap_jitter < 0 or args.ldap_jitter > 100:
-        parser.error('--ldap-jitter must be between 0 and 100')
-    if args.ldap_jitter and ldap_interval_seconds is None:
-        parser.error('--ldap-jitter requires --ldap-interval')
-    if args.ldap_page_jitter < 0 or args.ldap_page_jitter > 100:
-        parser.error('--ldap-page-jitter must be between 0 and 100')
-    if args.ldap_page_jitter and ldap_page_interval_seconds is None:
-        parser.error('--ldap-page-jitter requires --ldap-page-interval')
+    if args.enum_jitter < 0 or args.enum_jitter > 100:
+        parser.error('--enum-jitter must be between 0 and 100')
+    if args.enum_jitter and enum_interval_seconds is None:
+        parser.error('--enum-jitter requires --enum-interval')
+    if args.enum_page_jitter < 0 or args.enum_page_jitter > 100:
+        parser.error('--enum-page-jitter must be between 0 and 100')
+    if args.enum_page_jitter and enum_page_interval_seconds is None:
+        parser.error('--enum-page-jitter requires --enum-page-interval')
+    if args.count_jitter < 0 or args.count_jitter > 100:
+        parser.error('--count-jitter must be between 0 and 100')
+    if args.count_jitter and count_interval_seconds is None:
+        parser.error('--count-jitter requires --count-interval')
     if args.throttle_jitter < 0 or args.throttle_jitter > 100:
         parser.error('--throttle-jitter must be between 0 and 100')
     if args.throttle_jitter and throttle_ms is None:
@@ -934,6 +983,7 @@ def main():
         parser.error('--run-jitter requires --run-start and --run-end')
     if args.run_days and not args.run_start:
         parser.error('--run-days requires --run-start and --run-end')
+    pacing_notes = []
     if args.run_start:
         try:
             run_start_h, run_start_m = parse_run_time(args.run_start)
@@ -958,7 +1008,7 @@ def main():
                 parser.error(str(e))
         tw = install_time_window(run_start_h, run_start_m, run_end_h, run_end_m,
                                  run_days, run_jitter_minutes)
-        logging.info(tw.describe())
+        pacing_notes.append(tw.describe())
         install_ldap_search_counter()
     if args.partition_auto:
         if not args.partition_ldap:
@@ -975,13 +1025,16 @@ def main():
         if args.ldap_channel_binding:
             parser.error("--ldap-channel-binding can't be combined with --ldapx-target; channel binding is "
                          "injected by ldapx when --ldapx-ldaps is set")
-    if ldap_interval_seconds is not None or ldap_page_interval_seconds is not None:
-        pacer = install_ldap_pacing(ldap_interval_seconds or 0, args.ldap_jitter,
-                                    ldap_page_interval_seconds or 0, args.ldap_page_jitter)
-        logging.info(pacer.describe())
+    if enum_interval_seconds is not None or enum_page_interval_seconds is not None:
+        pacer = install_ldap_pacing(enum_interval_seconds or 0, args.enum_jitter,
+                                    enum_page_interval_seconds or 0, args.enum_page_jitter)
+        pacing_notes.append(pacer.describe())
+    if count_interval_seconds is not None:
+        count_pacer = install_count_pacing(count_interval_seconds, args.count_jitter)
+        pacing_notes.append('Count queries: %s' % count_pacer.describe())
     if throttle_ms is not None:
         host_pacer = install_host_pacing(throttle_ms, args.throttle_jitter)
-        logging.info(host_pacer.describe())
+        pacing_notes.append(host_pacer.describe())
 
     # ldapx mode: start the child processes first so a missing domain can be
     # discovered from rootDSE and Kerberos can be pointed at the real DC.
@@ -1114,6 +1167,8 @@ def main():
         tw = get_time_window()
         if tw is not None:
             tw.wait_if_outside()
+        for note in pacing_notes:
+            logging.info(note)
         bloodhound.run(collect=collect,
                        num_workers=args.workers,
                        disable_pooling=args.disable_pooling,
