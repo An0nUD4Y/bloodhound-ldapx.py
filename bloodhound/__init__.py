@@ -27,7 +27,7 @@ import socket, subprocess, threading
 from zipfile import ZipFile
 from bloodhound.ad.domain import AD, ADDC
 from bloodhound.ad.authentication import ADAuthentication, enable_kerberos_socks, disable_kerberos_socks
-from bloodhound.ad.utils import ADUtils, CollectionException, parse_ldap_interval, parse_throttle, install_ldap_pacing, install_ldap_search_counter, install_host_pacing, ldap_search_count
+from bloodhound.ad.utils import ADUtils, CollectionException, parse_ldap_interval, parse_throttle, install_ldap_pacing, install_ldap_search_counter, install_ldap_binary_filter, install_host_pacing, ldap_search_count
 from bloodhound.ldapxbin import LDAPX_VERSION, resolve_ldapx_binary
 from bloodhound.enumeration.computers import ComputerEnumerator
 from bloodhound.enumeration.memberships import MembershipEnumerator
@@ -464,6 +464,10 @@ class BloodHound(object):
     def run(self, collect, num_workers=10, disable_pooling=False, timestamp="", computerfile="", cachefile=None, exclude_dcs=False, fileNamePrefix="", resume=None, partition_ldap=False):
         start_time = time.time()
         install_ldap_search_counter()
+        if partition_ldap:
+            # Slices 80-ff put a non-UTF-8 byte in the filter. ldap3 crashes
+            # while logging that byte, before the search is sent.
+            install_ldap_binary_filter()
         self.resume = resume
         self.pdc.partition_ldap = partition_ldap
         if resume is not None:
@@ -751,9 +755,9 @@ def main():
     coopts.add_argument('--partition-ldap',
                         action='store_true',
                         help='Split schema, users, groups, computers, GPOs, OUs and containers into 256 '
-                             'objectGUID slices. --ldap-interval applies when a slice starts and '
-                             '--ldap-page-interval applies between pages inside a slice. Finished slices '
-                             'are skipped on --resume.')
+                             'slices, one for each leading byte of objectGUID. --ldap-interval applies '
+                             'when a slice starts and --ldap-page-interval applies between pages inside '
+                             'a slice. Finished slices are skipped on --resume.')
     coopts.add_argument('-op',
                         '--outputprefix',
                         metavar='PREFIX_NAME',
