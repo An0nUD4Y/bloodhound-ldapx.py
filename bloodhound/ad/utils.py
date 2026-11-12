@@ -788,6 +788,54 @@ _LDAP_PACER = None
 _HOST_PACER = None
 _LDAP_SEARCHES = 0
 _SEARCH_WRAPPED = False
+_BINARY_FILTER_PATCHED = False
+# Depth of filter_to_string on this thread. OctetString.__str__ consults it so
+# binary GUID prefixes can be logged without changing how search results decode.
+_FILTER_LOG_DEPTH = threading.local()
+
+
+def install_ldap_binary_filter():
+    """
+    Let ldap3 log a substring filter that holds raw GUID bytes.
+
+    A partition slice is (objectGUID=\\xx*). ldap3 turns xx into one octet and
+    stores it as an AssertionValue, which is UTF-8. Before the search is
+    written to the socket, filter_to_string() does str() on that octet for
+    connection.request. Bytes 0x00-0x7f decode. Bytes 0x80-0xff raise
+    PyAsn1UnicodeDecodeError, and the search never leaves the client.
+
+    The fallback runs only while filter_to_string() is on the stack. Attribute
+    values coming back from the directory still decode as they always have.
+    """
+    global _BINARY_FILTER_PATCHED
+    if _BINARY_FILTER_PATCHED:
+        return
+    import ldap3.operation.search as search_mod
+    from pyasn1.error import PyAsn1UnicodeDecodeError
+    from pyasn1.type import univ
+
+    original_filter = search_mod.filter_to_string
+    original_str = univ.OctetString.__str__
+
+    def _octet_str(self):
+        if not getattr(_FILTER_LOG_DEPTH, 'depth', 0):
+            return original_str(self)
+        try:
+            return original_str(self)
+        except (PyAsn1UnicodeDecodeError, UnicodeDecodeError):
+            return ''.join('\\%02x' % octet for octet in self.asOctets())
+
+    def _filter_to_string(filter_object):
+        depth = getattr(_FILTER_LOG_DEPTH, 'depth', 0)
+        _FILTER_LOG_DEPTH.depth = depth + 1
+        try:
+            return original_filter(filter_object)
+        finally:
+            _FILTER_LOG_DEPTH.depth = depth
+
+    univ.OctetString.__str__ = _octet_str
+    search_mod.filter_to_string = _filter_to_string
+    _BINARY_FILTER_PATCHED = True
 
 
 def get_ldap_pacer():
